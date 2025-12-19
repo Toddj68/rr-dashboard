@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RR Dashboard V17.9</title>
+    <style>
+        :root { --primary: #2c3e50; --accent: #27ae60; --danger: #e74c3c; --sidebar: #ecf0f1; --gold: #f1c40f; --log-blue: #0366d6; --normal-pwr: #2980b9; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #bdc3c7; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        .panel { padding: 15px; width: 100%; box-sizing: border-box; background: white; border-bottom: 2px solid #ccc; overflow-y: auto; }
+        #main-panel { order: 1; flex-shrink: 0; }
+        #history-panel { order: 2; background: var(--sidebar); height: 300px; }
+        #detail-panel { order: 3; background: var(--sidebar); flex-grow: 1; }
+        input, button { font-size: 18px !important; padding: 12px !important; margin: 5px 0; border: 2px solid var(--primary); border-radius: 8px; width: 100%; box-sizing: border-box; }
+        .log-btn-qrp { background: var(--accent); color: white; border: none; font-weight: bold; height: 60px; }
+        .log-btn-normal { background: var(--normal-pwr); color: white; border: none; font-weight: bold; height: 60px; }
+        .repeater-card { background: var(--primary); color: white; padding: 15px; border-radius: 10px; border-top: 5px solid var(--gold); }
+        .log-item { background: white; padding: 10px; margin-bottom: 8px; border-radius: 8px; border-left: 6px solid var(--accent); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .credits { text-align: center; font-size: 10px; color: #7f8c8d; padding: 10px; }
+    </style>
+</head>
+<body onload="initApp()">
+
+    <div id="main-panel" class="panel">
+        <h1 style="font-size:1.2rem; margin:0; text-align:center;">RR Dashboard V17.9</h1>
+        <div id="sysStatus" style="text-align:center; font-size:10px; background:#333; color:white; padding:4px; border-radius:4px; margin:10px 0;">INITIALIZING...</div>
+        
+        <label style="font-size:12px; font-weight:bold;">RR# (Unlimited)</label>
+        <input type="number" id="rrNum" value="1" oninput="lookupRepeater()">
+
+        <div style="display:flex; gap:10px;">
+            <div style="flex:2;"><label style="font-size:12px; font-weight:bold;">Callsign</label><input type="text" id="callsign" placeholder="CALL" style="text-transform: uppercase;" oninput="handleCallInput()"></div>
+            <div style="flex:1;"><label style="font-size:12px; font-weight:bold;">Signal</label><input type="number" id="sigStrength" value="5"></div>
+        </div>
+        
+        <input type="text" id="opNameInput" placeholder="Awaiting callsign..." style="background:#f1f8ff; text-align:center; border:none;" readonly>
+
+        <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="log-btn-qrp" onclick="saveContact(true)">LOG QRP</button>
+            <button class="log-btn-normal" onclick="saveContact(false)">LOG NORMAL</button>
+        </div>
+    </div>
+
+    <div id="history-panel" class="panel">
+        <h2 style="font-size:1rem; margin:0 0 10px 0;">📝 Session Log</h2>
+        <div id="fullLog"></div>
+        <div style="display:flex; gap:5px; margin-top:10px;">
+            <button onclick="exportLog()" style="font-size:11px; height:40px; background:var(--primary); color:white;">📥 EXPORT</button>
+            <button onclick="clearLog()" style="font-size:11px; height:40px; background:var(--danger); color:white;">🗑️ RESET</button>
+        </div>
+    </div>
+
+    <div id="detail-panel" class="panel">
+        <div id="repeaterDisplay"></div>
+        <h2 style="margin-top:20px; font-size:1rem;">📡 Search & CSV Tools</h2>
+        <div style="display:flex; gap:5px;"><input type="text" id="dbSearch" placeholder="Find Repeater..."><button onclick="searchRepeaters()" style="width:80px; background:var(--primary); color:white;">FIND</button></div>
+        <div id="dbSearchResults" style="display:none; background:white; border:1px solid #ccc; max-height:120px; overflow-y:auto; margin:10px 0;"></div>
+        <div style="border:1px solid #ccc; padding:10px; margin-top:10px; border-radius:5px;">
+            <input type="file" id="csvFileInput" accept=".csv" style="font-size:10px; border:none;">
+            <button onclick="importCSV()" style="font-size:11px; background:var(--primary); color:white;">🚀 IMPORT LOG</button>
+        </div>
+        <div id="localHistory" style="margin-top:10px;"></div>
+        <div class="credits">© 2025 WB6CFA | Created with Gemini AI</div>
+    </div>
+
+<script>
+    const factoryDB = { "1":["Capitol Hill","WW7PSR","146.960-","PSRG"], "2":["Seattle","WW7PSR","52.870-","PSRG"], "30":["Federal Way","WA7FW","147.040+","FWARC"], "157":["Buck Mtn.","K7DK","440.950+","Mark K7DK System"] };
+    let activeDB = factoryDB; let contacts = [];
+
+    function initApp() {
+        const saved = localStorage.getItem('wb6cfa_v121');
+        if (saved) contacts = JSON.parse(saved);
+        lookupRepeater(); updateLogUI();
+    }
+
+    async function handleCallInput() {
+        const call = document.getElementById('callsign').value.trim().toUpperCase();
+        if (call.length < 3) return;
+        try {
+            const res = await fetch(`https://callook.info/${call}/json`);
+            const data = await res.json();
+            if (data.status === "VALID") {
+                document.getElementById('opNameInput').value = `${data.name}, ${data.address.line2.split(',')[0]}`;
+            }
+        } catch (e) { document.getElementById('opNameInput').value = "Station " + call; }
+    }
+
+    function lookupRepeater() {
+        const rr = document.getElementById('rrNum').value.trim();
+        const display = document.getElementById('repeaterDisplay');
+        const hist = document.getElementById('localHistory');
+        hist.innerHTML = "<b>History for RR#" + rr + "</b>";
+        if (activeDB[rr]) {
+            const r = activeDB[rr];
+            display.innerHTML = `<div class="repeater-card"><b>RR# ${rr}</b><br><span style="font-size:1.3rem;">${r[0]}</span><br>${r[2]}</div>`;
+            contacts.filter(c => String(c.num) === String(rr)).forEach(m => {
+                hist.innerHTML += `<div style="font-size:11px; border-bottom:1px solid #ddd; padding:3px;">${m.call} at ${m.time}</div>`;
+            });
+        } else { display.innerHTML = "RR# " + rr + " not in database."; }
+    }
+
+    function saveContact(isQRP) {
+        const rr = document.getElementById('rrNum').value.trim();
+        const call = document.getElementById('callsign').value.toUpperCase().trim();
+        if (!rr || !call) return alert("Error: Missing RR# or Callsign.");
+        contacts.unshift({ 
+            time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false}), 
+            num: rr, call: call, name: document.getElementById('opNameInput').value, 
+            signal: document.getElementById('sigStrength').value, qrp: isQRP, timestamp: Date.now() 
+        });
+        localStorage.setItem('wb6cfa_v121', JSON.stringify(contacts));
+        document.getElementById('callsign').value = "";
+        updateLogUI(); lookupRepeater();
+    }
+
+    function updateLogUI() {
+        const log = document.getElementById('fullLog'); log.innerHTML = "";
+        contacts.forEach(c => {
+            const color = c.qrp ? 'var(--accent)' : 'var(--normal-pwr)';
+            log.innerHTML += `<div class="log-item" style="border-left-color:${color}"><b>RR#${c.num} ${c.call}</b> | CM ${c.signal}<br><span style="font-size:10px;">${c.name}</span></div>`;
+        });
+        document.getElementById('sysStatus').innerText = "LOGS: " + contacts.length + " | RR IN USE: #" + document.getElementById('rrNum').value;
+    }
+
+    function searchRepeaters() {
+        const q = document.getElementById('dbSearch').value.toLowerCase();
+        const res = document.getElementById('dbSearchResults');
+        res.innerHTML = ""; res.style.display = "block";
+        Object.keys(activeDB).forEach(rr => {
+            if (activeDB[rr][0].toLowerCase().includes(q) || rr.includes(q)) {
+                res.innerHTML += `<div style="padding:10px; border-bottom:1px solid #eee;" onclick="selectRR('${rr}')">RR#${rr}: ${activeDB[rr][0]}</div>`;
+            }
+        });
+    }
+    function selectRR(rr) { document.getElementById('rrNum').value = rr; document.getElementById('dbSearchResults').style.display="none"; lookupRepeater(); updateLogUI(); }
+
+    function importCSV() {
+        const file = document.getElementById('csvFileInput').files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const lines = e.target.result.split(/\r?\n/);
+            lines.forEach((l, i) => {
+                if (i === 0 || !l.trim()) return;
+                const c = l.split(',').map(s => s.replace(/"/g, '').trim());
+                contacts.push({ time: c[1], num: c[4], call: c[2], name: c[6], signal: c[3], qrp: c[5]==='TRUE', timestamp: Date.now() });
+            });
+            localStorage.setItem('wb6cfa_v121', JSON.stringify(contacts));
+            updateLogUI(); alert("Imported.");
+        }; reader.readAsText(file);
+    }
+
+    function exportLog() {
+        let csv = "Time,Call,RR#,QRP,Name\n";
+        contacts.forEach(c => { csv += `"${c.time}","${c.call}","${c.num}","${c.qrp}","${c.name}"\n`; });
+        const a = document.createElement('a');
+        a.href = window.URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.download = `Log_${Date.now()}.csv`; a.click();
+    }
+    function clearLog() { if(confirm("Clear?")) { contacts=[]; localStorage.removeItem('wb6cfa_v121'); updateLogUI(); } }
+</script>
+</body>
+</html>
